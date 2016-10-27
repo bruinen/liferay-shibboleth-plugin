@@ -1,5 +1,13 @@
-Bundle-SymbolicName: shiboleth.autologin
-Bundle-Version: 1.0.0
-Fragment-Host: com.liferay.login.web;bundle-version="1.0.0"
+Bundle-SymbolicName: liferay-shibboleth-plugin
+Bundle-Version: 1.2.0
+Export-Package: com.liferay.portal.security.shibboleth.configuration,\
+                com.liferay.portal.security.shibboleth.constants; version=1.0
+
 -sources: true
 -metatype: *
+-check:all
+
+Liferay-Releng-Module-Group-Description:
+Liferay-Releng-Module-Group-Title: Security Frameworks
+Web-ContextPath: /liferay-shibboleth-plugin
+

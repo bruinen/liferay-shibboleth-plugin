@@ -8,6 +8,7 @@ import com.liferay.portal.kernel.log.LogFactoryUtil;
 import com.liferay.portal.kernel.model.CompanyConstants;
 import com.liferay.portal.kernel.model.Role;
 import com.liferay.portal.kernel.model.User;
+import com.liferay.portal.kernel.module.configuration.ConfigurationException;
 import com.liferay.portal.kernel.module.configuration.ConfigurationProvider;
 import com.liferay.portal.kernel.security.auto.login.AutoLogin;
 import com.liferay.portal.kernel.security.auto.login.AutoLoginException;
@@ -71,11 +72,7 @@ public class ShibbolethAutoLogin implements AutoLogin {
         long companyId = PortalUtil.getCompanyId(req);
 
         try {
-            ShibbolethConfiguration configuration =
-                    _configurationProvider.getConfiguration(
-                            ShibbolethConfiguration.class,
-                            new CompanyServiceSettingsLocator(
-                                    companyId, ShibbolethConstants.SERVICE_NAME)) ;
+            ShibbolethConfiguration configuration = getShibbolethConfiguration(companyId);
             _log.info("Shibboleth Autologin [modified 2]");
 
             if (!configuration.enabled()) {
@@ -111,11 +108,7 @@ public class ShibbolethAutoLogin implements AutoLogin {
         if (Validator.isNull(login)) {
             return null;
         }
-        ShibbolethConfiguration configuration =
-                _configurationProvider.getConfiguration(
-                        ShibbolethConfiguration.class,
-                        new CompanyServiceSettingsLocator(
-                                companyId, ShibbolethConstants.SERVICE_NAME));
+        ShibbolethConfiguration configuration = getShibbolethConfiguration(companyId);
         String authType = PrefsPropsUtil.getString(
                 companyId, PropsKeys.COMPANY_SECURITY_AUTH_TYPE,
                 PropsValues.COMPANY_SECURITY_AUTH_TYPE);
@@ -176,6 +169,13 @@ public class ShibbolethAutoLogin implements AutoLogin {
         }
 
         return user;
+    }
+
+    private ShibbolethConfiguration getShibbolethConfiguration(long companyId) throws ConfigurationException {
+        return _configurationProvider.getConfiguration(
+                ShibbolethConfiguration.class,
+                new CompanyServiceSettingsLocator(
+                        companyId, ShibbolethConstants.SERVICE_NAME));
     }
 
     /**
