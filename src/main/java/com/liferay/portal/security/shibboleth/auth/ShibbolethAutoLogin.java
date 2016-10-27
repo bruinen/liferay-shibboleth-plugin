@@ -1,22 +1,28 @@
-package com.liferay.portal.security.auth;
+package com.liferay.portal.security.shibboleth.auth;
 
-import com.liferay.portal.NoSuchUserException;
+import com.liferay.portal.kernel.exception.NoSuchUserException;
 import com.liferay.portal.kernel.exception.PortalException;
 import com.liferay.portal.kernel.exception.SystemException;
 import com.liferay.portal.kernel.log.Log;
 import com.liferay.portal.kernel.log.LogFactoryUtil;
-import com.liferay.portal.kernel.util.StringPool;
-import com.liferay.portal.kernel.util.Validator;
-import com.liferay.portal.model.CompanyConstants;
-import com.liferay.portal.model.Role;
-import com.liferay.portal.model.User;
-import com.liferay.portal.security.ldap.PortalLDAPImporterUtil;
-import com.liferay.portal.service.RoleLocalServiceUtil;
-import com.liferay.portal.service.ServiceContext;
-import com.liferay.portal.service.UserLocalServiceUtil;
+import com.liferay.portal.kernel.model.CompanyConstants;
+import com.liferay.portal.kernel.model.Role;
+import com.liferay.portal.kernel.model.User;
+import com.liferay.portal.kernel.module.configuration.ConfigurationProvider;
+import com.liferay.portal.kernel.security.auto.login.AutoLogin;
+import com.liferay.portal.kernel.security.auto.login.AutoLoginException;
+import com.liferay.portal.kernel.service.RoleLocalService;
+import com.liferay.portal.kernel.service.ServiceContext;
+import com.liferay.portal.kernel.service.UserLocalService;
+import com.liferay.portal.kernel.settings.CompanyServiceSettingsLocator;
+import com.liferay.portal.kernel.util.*;
+import com.liferay.portal.security.exportimport.UserImporter;
+import com.liferay.portal.security.shibboleth.configuration.ShibbolethConfiguration;
+import com.liferay.portal.security.shibboleth.constants.ShibbolethConstants;
 import com.liferay.portal.shibboleth.util.ShibbolethPropsKeys;
-import com.liferay.portal.shibboleth.util.Util;
-import com.liferay.portal.util.PortalUtil;
+import com.liferay.portal.util.PropsValues;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -25,17 +31,26 @@ import java.util.*;
 
 /**
  * Performs autologin based on the header values passed by Shibboleth.
- * 
+ * <p/>
  * The Shibboleth user ID header set in the configuration must contain the user
  * ID, if users are authenticated by screen name or the user email, if the users
  * are authenticated by email (Portal settings --> Authentication --> General).
- * 
- * @author Romeo Sheshi
+ *
+ * @author Romeo Sheshi <rsheshi@gmail.com>
  * @author Ivan Novakov <ivan.novakov@debug.cz>
  */
+@Component(immediate = true,
+           configurationPid = "com.liferay.portal.security.shibboleth.configuration.ShibbolethConfiguration",
+           service = AutoLogin.class)
 public class ShibbolethAutoLogin implements AutoLogin {
 
-	private static Log _log = LogFactoryUtil.getLog(ShibbolethAutoLogin.class);
+
+    private static Log _log = LogFactoryUtil.getLog(ShibbolethAutoLogin.class);
+
+
+    private UserLocalService userLocalService;
+    private RoleLocalService roleLocalService;
+
 
     @Override
     public String[] handleException(HttpServletRequest request, HttpServletResponse response, Exception e) throws AutoLoginException {
@@ -55,11 +70,15 @@ public class ShibbolethAutoLogin implements AutoLogin {
         HttpSession session = req.getSession(false);
         long companyId = PortalUtil.getCompanyId(req);
 
-
         try {
+            ShibbolethConfiguration configuration =
+                    _configurationProvider.getConfiguration(
+                            ShibbolethConfiguration.class,
+                            new CompanyServiceSettingsLocator(
+                                    companyId, ShibbolethConstants.SERVICE_NAME)) ;
             _log.info("Shibboleth Autologin [modified 2]");
 
-            if (!Util.isEnabled(companyId)) {
+            if (!configuration.enabled()) {
                 return credentials;
             }
 
@@ -92,13 +111,19 @@ public class ShibbolethAutoLogin implements AutoLogin {
         if (Validator.isNull(login)) {
             return null;
         }
-
-        String authType = Util.getAuthType(companyId);
+        ShibbolethConfiguration configuration =
+                _configurationProvider.getConfiguration(
+                        ShibbolethConfiguration.class,
+                        new CompanyServiceSettingsLocator(
+                                companyId, ShibbolethConstants.SERVICE_NAME));
+        String authType = PrefsPropsUtil.getString(
+                companyId, PropsKeys.COMPANY_SECURITY_AUTH_TYPE,
+                PropsValues.COMPANY_SECURITY_AUTH_TYPE);
 
         try {
             if (authType.equals(CompanyConstants.AUTH_TYPE_SN)) {
                 _log.info("Trying to find user with screen name: " + login);
-                user = UserLocalServiceUtil.getUserByScreenName(companyId, login);
+                user = userLocalService.getUserByScreenName(companyId, login);
             } else if (authType.equals(CompanyConstants.AUTH_TYPE_EA)) {
 
                 String emailAddress = (String) session.getAttribute(ShibbolethPropsKeys.SHIBBOLETH_HEADER_EMAIL);
@@ -107,33 +132,45 @@ public class ShibbolethAutoLogin implements AutoLogin {
                 }
 
                 _log.info("Trying to find user with email: " + emailAddress);
-                user = UserLocalServiceUtil.getUserByEmailAddress(companyId, emailAddress);
+                user = userLocalService.getUserByEmailAddress(companyId, emailAddress);
             } else {
                 throw new NoSuchUserException();
             }
 
             _log.info("User found: " + user.getScreenName() + " (" + user.getEmailAddress() + ")");
 
-            if (Util.autoUpdateUser(companyId)) {
+            if (configuration.autoUpdateUsers()) {
                 _log.info("Auto-updating user...");
                 updateUserFromSession(user, session);
             }
 
         } catch (NoSuchUserException e) {
-            _log.error("User "  + login + " not found");
+            _log.error("User " + login + " not found");
 
-            if (Util.autoCreateUser(companyId)) {
+            if (configuration.autoCreateUsers()) {
                 _log.info("Importing user from session...");
                 user = createUserFromSession(companyId, session);
                 _log.info("Created user with ID: " + user.getUserId());
-            } else if (Util.importUser(companyId)) {
+            } else if (configuration.importFromLDAP()) {
                 _log.info("Importing user from LDAP...");
-                user = PortalLDAPImporterUtil.importLDAPUser(companyId, StringPool.BLANK, login);
+                try {
+                    if (authType.equals(CompanyConstants.AUTH_TYPE_SN)) {
+                        user = userImporter.importUser(
+                                companyId, StringPool.BLANK, login);
+                    }
+                    else {
+                        user = userImporter.importUser(
+                                companyId, login, StringPool.BLANK);
+                    }
+                }
+                catch (SystemException se) {
+                    _log.error("Exception while importing user from ldap: " + se.getMessage());
+                }
             }
         }
 
         try {
-            updateUserRolesFromSession(companyId, user, session);
+            updateUserRolesFromSession(companyId, user, session,configuration);
         } catch (Exception e) {
             _log.error("Exception while updating user roles from session: " + e.getMessage());
         }
@@ -208,7 +245,7 @@ public class ShibbolethAutoLogin implements AutoLogin {
         boolean sendEmail = false;
         ServiceContext serviceContext = null;
 
-        return UserLocalServiceUtil.addUser(creatorUserId, companyId, autoPassword, password1, password2,
+        return userLocalService.addUser(creatorUserId, companyId, autoPassword, password1, password2,
                 autoScreenName, screenName, emailAddress, facebookId, openId, locale, firstName, middleName, lastName,
                 prefixId, suffixId, male, birthdayMonth, birthdayDay, birthdayYear, jobTitle, groupIds,
                 organizationIds, roleIds, userGroupIds, sendEmail, serviceContext);
@@ -242,23 +279,24 @@ public class ShibbolethAutoLogin implements AutoLogin {
         }
 
         if (modified) {
-            UserLocalServiceUtil.updateUser(user);
+            userLocalService.updateUser(user);
         }
     }
 
-    private void updateUserRolesFromSession(long companyId, User user, HttpSession session) throws Exception {
-        if (!Util.autoAssignUserRole(companyId)) {
+    private void updateUserRolesFromSession(long companyId, User user, HttpSession session, ShibbolethConfiguration configuration) throws Exception {
+
+        if (!configuration.autoAssignUserRole()) {
             return;
         }
 
-        List<Role> currentFelRoles = getRolesFromSession(companyId, session);
+        List<Role> currentFelRoles = getRolesFromSession(companyId, session,configuration);
         long[] currentFelRoleIds = roleListToLongArray(currentFelRoles);
 
-        List<Role> felRoles = getAllRolesWithConfiguredSubtype(companyId);
+        List<Role> felRoles = getAllRolesWithConfiguredSubtype(configuration);
         long[] felRoleIds = roleListToLongArray(felRoles);
 
-        RoleLocalServiceUtil.unsetUserRoles(user.getUserId(), felRoleIds);
-        RoleLocalServiceUtil.addUserRoles(user.getUserId(), currentFelRoleIds);
+        roleLocalService.unsetUserRoles(user.getUserId(), felRoleIds);
+        roleLocalService.addUserRoles(user.getUserId(), currentFelRoleIds);
 
         _log.info("User '" + user.getScreenName() + "' has been assigned " + currentFelRoleIds.length + " role(s): "
                 + Arrays.toString(currentFelRoleIds));
@@ -274,12 +312,12 @@ public class ShibbolethAutoLogin implements AutoLogin {
         return roleIds;
     }
 
-    private List<Role> getAllRolesWithConfiguredSubtype(long companyId) throws Exception {
-        String roleSubtype = Util.autoAssignUserRoleSubtype(companyId);
-        return RoleLocalServiceUtil.getSubtypeRoles(roleSubtype);
+    private List<Role> getAllRolesWithConfiguredSubtype(ShibbolethConfiguration configuration) throws Exception {
+        String roleSubtype = configuration.autoAssignUserRoleSubType();
+        return roleLocalService.getSubtypeRoles(roleSubtype);
     }
 
-    private List<Role> getRolesFromSession(long companyId, HttpSession session) throws SystemException {
+    private List<Role> getRolesFromSession(long companyId, HttpSession session,ShibbolethConfiguration configuration) throws SystemException {
         List<Role> currentFelRoles = new ArrayList<Role>();
         String affiliation = (String) session.getAttribute(ShibbolethPropsKeys.SHIBBOLETH_HEADER_AFFILIATION);
 
@@ -291,36 +329,36 @@ public class ShibbolethAutoLogin implements AutoLogin {
         for (String roleName : affiliationList) {
             Role role;
             try {
-                role = RoleLocalServiceUtil.getRole(companyId, roleName);
+                role = roleLocalService.getRole(companyId, roleName);
             } catch (PortalException e) {
                 _log.info("Exception while getting role with name '" + roleName + "': " + e.getMessage());
-                try{
-                    if(Util.isCreateRoleEnabled(companyId)){
-                        List<Role> roleList = RoleLocalServiceUtil.getRoles(companyId);
-                        long [] roleIds = roleListToLongArray(roleList);
+                try {
+                    if (configuration.autoCreateRole()) {
+                        List<Role> roleList = roleLocalService.getRoles(companyId);
+                        long[] roleIds = roleListToLongArray(roleList);
                         Arrays.sort(roleIds);
-                        long newId = roleIds[roleIds.length-1];
-                        newId = newId+1;
-                        role = RoleLocalServiceUtil.createRole(newId);
+                        long newId = roleIds[roleIds.length - 1];
+                        newId = newId + 1;
+                        role = roleLocalService.createRole(newId);
 
                         long classNameId = 0;
-                        try{
-                        	classNameId = RoleLocalServiceUtil.getRole(roleIds[roleIds.length-1]).getClassNameId();
-                        }catch (PortalException ex){
-                        	_log.info("classname error");
+                        try {
+                            classNameId = roleLocalService.getRole(roleIds[roleIds.length - 1]).getClassNameId();
+                        } catch (PortalException ex) {
+                            _log.info("classname error");
                         }
                         role.setClassNameId(classNameId);
-        				role.setCompanyId(companyId);
-        				role.setClassPK(newId);
-        				role.setDescription(null);
-        				role.setTitleMap(null);
-        				role.setName(roleName);
-        				role.setType(1);
-        				RoleLocalServiceUtil.addRole(role);
-                    }else continue;
-                }catch (Exception exc){
+                        role.setCompanyId(companyId);
+                        role.setClassPK(newId);
+                        role.setDescription(null);
+                        role.setTitleMap(null);
+                        role.setName(roleName);
+                        role.setType(1);
+                        roleLocalService.addRole(role);
+                    } else continue;
+                } catch (Exception exc) {
                     continue;
-                }        
+                }
             }
 
             currentFelRoles.add(role);
@@ -336,5 +374,31 @@ public class ShibbolethAutoLogin implements AutoLogin {
         }
 
     }
+    @Reference(unbind = "-")
+    protected void setUserImporter(UserImporter userImporter) {
+        this.userImporter = userImporter;
+    }
+
+    @Reference(unbind = "-")
+    protected void setUserLocalService(UserLocalService userLocalService) {
+        this.userLocalService = userLocalService;
+    }
+
+
+    @Reference(unbind = "-")
+    protected void setRoleLocalService(RoleLocalService roleLocalService) {
+        this.roleLocalService = roleLocalService;
+    }
+
+
+    @Reference(unbind = "-")
+    protected void setConfigurationProvider(
+            ConfigurationProvider configurationProvider) {
+
+        _configurationProvider = configurationProvider;
+    }
+
+    private ConfigurationProvider _configurationProvider;
+    private UserImporter userImporter;
 
 }

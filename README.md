@@ -1,4 +1,4 @@
-Shibboleth Authentication Plugin for Liferay
+gShibboleth Authentication Plugin for Liferay
 ============================================
 
 * This plugin is derived from an initial version of rsheshi@gmail.com. See: http://code.google.com/p/liferay-shibboleth-plugin/
