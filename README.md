@@ -1,4 +1,4 @@
-gShibboleth Authentication Plugin for Liferay
+Shibboleth Authentication Plugin for Liferay
 ============================================
 
 * This plugin is derived from an initial version of rsheshi@gmail.com. See: http://code.google.com/p/liferay-shibboleth-plugin/
@@ -91,16 +91,17 @@ Make sure, the backend servlet container has properly configured AJP connector. 
 
 Plugin installation and configuration
 -------------------------------------
-
-Clone the repository and run the Maven install script:
+The version for liferay 7 use blade-cli.  
+Clone the repository into the modules folder of the workspace created with blade and run the blade commands :
 
     # git clone https://github.com/mheder/liferay-shibboleth-plugin
     # cd liferay-shibboleth-plugin
-    # mvn install
+    # blade compileJava
+    # blade deploy
 
-Then deploy the WAR file to your servlet container.
-After a successful installation a new "Shibboleth" section appears in the Liferay's Control panel at "Portal Settings / Authentication". You can adjust Shibboleth authentication there. The most important setting is the name of the attribute from with the user identity is taken.
-At the same time, in "Portal Settings --> Authentication --> General", disable all "Allow..." options.
+After a successful installation you can configure the application in
+ "Control Panel --> Configuration --> System Settings --> Foundation -->Shibboleth SSO Configuration"
+
 
 Further steps
 -------------
