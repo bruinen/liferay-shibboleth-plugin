@@ -13,6 +13,11 @@ Additional features has been added:
 * added options to specify the headers (Shibboleth attributes) to be used for extracting email, first name and last name
 * basic attribute to role mapping
 
+Upgrade to liferay 7
+------------
+The upgrade to liferay 7 use the osgi module and gradle using blade-cli https://dev.liferay.com/develop/tutorials/-/knowledge_base/7-0/blade-cli
+
+
 Requirements
 ------------
 
